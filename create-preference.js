@@ -1,61 +1,58 @@
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Método no permitido' });
   }
 
-  const token = process.env.MERCADOPAGO_ACCESS_TOKEN;
-  if (!token) {
-    return res.status(500).json({ error: 'Falta MERCADOPAGO_ACCESS_TOKEN en Vercel.' });
+  const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
+  if (!accessToken) {
+    return res.status(500).json({ error: 'Falta configurar MERCADOPAGO_ACCESS_TOKEN en Vercel' });
   }
 
   try {
-    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
-    const title = String(body.title || 'Gorra personalizada').slice(0, 120);
-    const description = String(body.description || '').slice(0, 250);
-    const unitPrice = Number(body.unit_price);
+    const { title, description, unit_price, quantity = 1 } = req.body || {};
+    const price = Number(unit_price);
+    const qty = Number(quantity);
 
-    if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
-      return res.status(400).json({ error: 'Precio inválido.' });
+    if (!title || !Number.isFinite(price) || price <= 0 || !Number.isInteger(qty) || qty <= 0) {
+      return res.status(400).json({ error: 'Datos de pedido inválidos' });
     }
 
-    const origin = `https://${req.headers.host}`;
     const preference = {
-      items: [{
-        id: `gorra-${Date.now()}`,
-        title,
-        description,
-        quantity: 1,
-        currency_id: 'ARS',
-        unit_price: unitPrice
-      }],
-      external_reference: `SE-${Date.now()}`,
-      back_urls: {
-        success: `${origin}/?pago=aprobado`,
-        pending: `${origin}/?pago=pendiente`,
-        failure: `${origin}/?pago=fallido`
-      },
-      auto_return: 'approved'
+      items: [
+        {
+          title: String(title).slice(0, 120),
+          description: description ? String(description).slice(0, 250) : undefined,
+          quantity: qty,
+          currency_id: 'ARS',
+          unit_price: price
+        }
+      ],
+      statement_descriptor: 'SIMPLE ESTAMPADOS'
     };
 
     const mpResponse = await fetch('https://api.mercadopago.com/checkout/preferences', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${token}`,
+        Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(preference)
     });
 
     const data = await mpResponse.json();
+
     if (!mpResponse.ok) {
       console.error('Mercado Pago error:', data);
-      return res.status(mpResponse.status).json({ error: 'Mercado Pago rechazó la preferencia.', details: data });
+      return res.status(mpResponse.status).json({ error: 'Mercado Pago rechazó la preferencia', details: data });
     }
 
-    return res.status(200).json({ id: data.id, init_point: data.init_point });
+    return res.status(200).json({
+      id: data.id,
+      init_point: data.init_point,
+      sandbox_init_point: data.sandbox_init_point
+    });
   } catch (error) {
     console.error(error);
-    return res.status(500).json({ error: 'Error interno al crear la preferencia.' });
+    return res.status(500).json({ error: 'No se pudo crear la preferencia de pago' });
   }
-};
+}
